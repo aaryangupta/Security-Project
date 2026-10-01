@@ -10,7 +10,7 @@ Give it a topic → it researches, writes a full report, safety-checks it, cache
 |---|---|
 | **FastAPI** | REST API — receives topics, returns reports |
 | **LangGraph** | 4-agent pipeline: Search → Summarize → Write → Verify |
-| **TensorZero** | LLM gateway — routes to Gemini 2.5 Flash, falls back to Groq Llama-3.1 |
+| **TensorZero** | LLM gateway — routes to Gemini 2.5 Flash, falls back to Groq gpt-oss-120b |
 | **AWS Bedrock Guardrails** | Blocks harmful input and output automatically |
 | **Redis (ElastiCache)** | Semantic cache + session memory + job queue |
 | **PostgreSQL + pgvector (RDS)** | Long-term memory — stores reports as vectors, enables semantic search |
@@ -210,7 +210,7 @@ You need three keys:
 | `GROQ_API_KEY` | https://console.groq.com/keys |
 | `LANGSMITH_API_KEY` | https://smith.langchain.com → Profile → API Keys → Create |
 
-Gemini is the primary model and Groq Llama 3.1 is the automatic fallback. Both have free tiers. No OpenAI account is required.
+Gemini is the primary model and Groq gpt-oss-120b is the automatic fallback. Both have free tiers. No OpenAI account is required.
 
 LangSmith is free. It traces every agent run and stores evaluation scores automatically — no extra setup needed after you add the key.
 
