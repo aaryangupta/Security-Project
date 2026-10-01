@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Environment & secrets — never commit real credentials
+.env
+.env.local
+*.env
+
+# Terraform — provider binaries and local state (real state is in S3)
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+
+# Saved plans contain sensitive values in plaintext (generated DB password)
+tfplan
+*.tfplan
+crash.log
+crash.*.log
+# .terraform.lock.hcl is intentionally NOT ignored — commit it to pin provider versions
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test / coverage artifacts
+htmlcov/
+.coverage
+coverage.xml
