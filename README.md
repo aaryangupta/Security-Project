@@ -49,7 +49,7 @@ PROJECT/
 ├── terraform/
 │   ├── backend.tf        Remote state (S3 + DynamoDB locking)
 │   ├── providers.tf      Provider versions and AWS profile
-│   ├── main.tf           Core infra — VPC, subnets, routing, VPC endpoints
+│   ├── main.tf           Core infra — VPC, subnets, routing, S3 gateway endpoint
 │   ├── variables.tf      All inputs
 │   ├── security.tf       Security groups
 │   ├── guardrail.tf      Bedrock guardrail + version
@@ -60,8 +60,7 @@ PROJECT/
 │   ├── iam.tf            Task, execution and EventBridge roles
 │   ├── ecs.tf            Cluster, task definitions, services, auto-scaling
 │   ├── scheduler.tf      EventBridge weekly red team rule
-│   ├── outputs.tf        ALB DNS, ECR URLs, endpoints
-│   └── terraform.tfvars  Image variables (gitignored)
+│   └── outputs.tf        ALB DNS, ECR URLs, endpoints
 ├── .github/workflows/
 │   └── deploy.yml        CI/CD pipeline with rollback on failure
 ├── bootstrap.bat         One-time backend setup (Windows)
@@ -85,7 +84,7 @@ Install these before starting:
 
 Docker is **not needed** on your machine. GitHub Actions builds and pushes images automatically.
 
-> 💸 **This costs real money while it runs.** Roughly 190 USD per month if left up, mostly the RDS instance, the load balancer, ElastiCache, the always-on Fargate tasks, and ten VPC endpoint network interfaces. None of it is free tier at these sizes. Follow **Tear Down Everything** at the bottom when you are done.
+> 💸 **This costs real money while it runs.** Roughly 90 USD per month if left up, after the optimisations in **Cost** below. Most of it is hourly charges for resources that exist, not traffic, so an idle stack costs nearly the same as a busy one. Follow **Tear Down Everything** at the bottom when you are done.
 
 ---
 
@@ -183,13 +182,13 @@ terraform init
 terraform apply
 ```
 
-The placeholder image values come from `terraform.tfvars`, so no `-var` flags are needed. GitHub Actions replaces them with real image tags on the first successful deploy.
+No variables are needed. Task definitions default to each ECR repo's `:latest` tag. On a fresh account those images don't exist yet, so tasks fail to start until the first GitHub Actions run pushes them. That is expected.
 
 Type `yes` when asked. Takes 5–10 minutes.
 
-> **Check the plan before approving.** It should read `59 to add, 0 to change, 0 to destroy`. If the account or region is wrong, you will see it here rather than after the bill arrives.
+> **Check the plan before approving.** It should read `57 to add, 0 to change, 0 to destroy`. If the account or region is wrong, you will see it here rather than after the bill arrives.
 
-This creates: VPC, subnets, ECS cluster, ALB, ElastiCache Redis, RDS PostgreSQL, Bedrock Guardrail, Secrets Manager, ECR repos, IAM roles, VPC endpoints, auto-scaling, EventBridge weekly red team schedule.
+This creates: VPC, subnets, ECS cluster, ALB, ElastiCache Redis, RDS PostgreSQL, Bedrock Guardrail, Secrets Manager, ECR repos, IAM roles, S3 gateway endpoint, auto-scaling, EventBridge weekly red team schedule.
 
 After it finishes, note these outputs — you'll need them:
 ```
@@ -233,16 +232,7 @@ Replace the `REPLACE_ME` values:
 
 Save. Leave everything else as is.
 
-> ⚠️ **Your next `terraform apply` will wipe these keys.** `secrets.tf` manages the secret contents, with the keys hardcoded as `REPLACE_ME`. Terraform sees your console edit as drift and resets it, and the app then fails with authentication errors that look unrelated. Pick one of these before you apply again:
->
-> **Option A — tell Terraform to stop managing the contents.** Add this to `aws_secretsmanager_secret_version.config` in `secrets.tf`. Terraform sets the initial value and never touches it again, so the console becomes the source of truth.
-> ```hcl
-> lifecycle {
->   ignore_changes = [secret_string]
-> }
-> ```
->
-> **Option B — keep Terraform in charge.** Add `google_ai_studio_api_key`, `groq_api_key` and `langsmith_api_key` as sensitive variables, reference them in `secrets.tf`, and supply them through `terraform.tfvars`, which is gitignored. Never edit the secret in the console after that.
+> **Terraform will not overwrite these.** `secrets.tf` writes the initial blob with `REPLACE_ME` placeholders, then ignores `secret_string` from then on, so the console is the source of truth for the keys. The catch: values Terraform puts in the blob, such as the Redis and database URLs, are no longer updated automatically either. If you rebuild RDS or Redis, update those two values by hand.
 
 **Optional — set an API key to protect your endpoints:**
 
@@ -395,6 +385,39 @@ curl http://<alb_dns>:8001/results
 ```
 
 The weekly red team also runs automatically every Monday at 2am UTC via EventBridge.
+
+---
+
+## Cost
+
+Monthly cost in us-east-1 at on-demand list prices (730 hours), before and after optimisation:
+
+| Resource | Before | After | What changed |
+|---|---|---|---|
+| VPC interface endpoints (5 × 2 AZs) | $73.00 | $0 | Removed. Tasks already have public IPs, so they reach AWS APIs through the internet gateway |
+| App task (Fargate) | $72.08 | $21.26 | Right-sized from 2 vCPU / 4 GB to 0.5 vCPU / 2 GB from measured usage |
+| PyRIT task (Fargate) | $9.01 | ~$3 | Moved to Fargate Spot; Spot pricing varies |
+| CloudWatch Container Insights | ~$5–15 | ~$1 | Disabled; free AWS/ECS metrics cover right-sizing |
+| ECR storage | grows per deploy | ~$1 | Lifecycle policy keeps the 3 newest images |
+| Load balancer | ~$19 | ~$19 | Unchanged |
+| RDS Postgres (db.t3.micro + 20 GB) | $15.44 | $15.44 | Unchanged |
+| Public IPv4 (4 addresses) | $14.60 | $14.60 | Unchanged |
+| ElastiCache Redis (cache.t3.micro) | $12.41 | $12.41 | Unchanged |
+| **Total** | **~$220** | **~$90** | |
+
+What each change teaches:
+
+- **Pay for what exists, not what's used.** Interface endpoints, the load balancer, RDS, Redis and public IPs all bill by the hour at zero traffic. Removing an idle resource beats tuning a busy one.
+- **Measure before right-sizing.** Over 24 hours the app peaked at 235 of 2048 CPU units and used a flat 600 MB of 4 GB. Cut CPU hard, because running short only slows a job. Keep memory headroom, because running short kills the task.
+- **Spot fits work that can be interrupted.** PyRIT keeps its results in Redis, so a reclaimed Spot task just restarts. The user-facing app stays on regular Fargate.
+- **Observability and storage costs build up quietly.** Container Insights bills per metric, and every CI push adds a 3.3 GB image. Neither shows up until the bill arrives.
+- **Network design is a cost decision.** Private subnets need either interface endpoints, about $7.30 a month per service, or a NAT gateway, about $33 a month plus data charges. Public subnets with security groups that only accept traffic from the load balancer cost nothing extra. That is the trade made here.
+
+Not done yet, in order of savings:
+
+1. **Destroy when not demoing.** `terraform destroy` drops the cost to $0, and `terraform apply` plus a CI re-run brings it back in about 15 minutes.
+2. **Scale PyRIT to zero** and rely on the weekly EventBridge run, if the always-on dashboard isn't needed.
+3. **Replace Redis or RDS** with cheaper equivalents, if the project's design allows it.
 
 ---
 

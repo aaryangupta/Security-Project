@@ -52,4 +52,10 @@ resource "aws_secretsmanager_secret_version" "config" {
     DB_POOL_MIN                = "2"
     DB_POOL_MAX                = "10"
   })
+
+  # Real API keys are pasted in via the console. Terraform writes the initial
+  # blob once and never overwrites it, or the keys would revert to REPLACE_ME.
+  lifecycle {
+    ignore_changes = [secret_string]
+  }
 }

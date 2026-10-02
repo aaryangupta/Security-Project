@@ -1,9 +1,18 @@
 resource "aws_ecs_cluster" "main" {
   name = "${var.project}-cluster"
+
+  # Container Insights bills per custom metric. The free AWS/ECS CPUUtilization and
+  # MemoryUtilization metrics are enough for right-sizing. Re-enable when debugging.
   setting {
     name  = "containerInsights"
-    value = "enabled"
+    value = "disabled"
   }
+}
+
+# FARGATE_SPOT runs on spare capacity at ~70% off, but AWS can reclaim it with 2 minutes' notice.
+resource "aws_ecs_cluster_capacity_providers" "main" {
+  cluster_name       = aws_ecs_cluster.main.name
+  capacity_providers = ["FARGATE", "FARGATE_SPOT"]
 }
 
 # ─── Log groups ──────────────────────────────────────────────────────────────
@@ -38,7 +47,7 @@ resource "aws_ecs_task_definition" "app" {
   container_definitions = jsonencode([
     {
       name         = "app"
-      image        = var.app_image
+      image        = coalesce(var.app_image, "${aws_ecr_repository.app.repository_url}:latest")
       essential    = true
       portMappings = [{ containerPort = 8000, protocol = "tcp" }]
       environment  = [{ name = "AWS_REGION", value = var.aws_region }]
@@ -54,7 +63,7 @@ resource "aws_ecs_task_definition" "app" {
     },
     {
       name         = "tensorzero"
-      image        = var.tensorzero_image
+      image        = coalesce(var.tensorzero_image, "${aws_ecr_repository.tensorzero.repository_url}:latest")
       essential    = true
       portMappings = [{ containerPort = 3000, protocol = "tcp" }]
       secrets = [
@@ -84,7 +93,7 @@ resource "aws_ecs_task_definition" "pyrit" {
 
   container_definitions = jsonencode([{
     name         = "pyrit"
-    image        = var.pyrit_image
+    image        = coalesce(var.pyrit_image, "${aws_ecr_repository.pyrit.repository_url}:latest")
     essential    = true
     portMappings = [{ containerPort = 8001, protocol = "tcp" }]
     environment = [
@@ -126,16 +135,27 @@ resource "aws_ecs_service" "app" {
   }
 
   lifecycle {
-    ignore_changes = [desired_count] # auto-scaling manages this
+    # desired_count: auto-scaling owns it.
+    # task_definition: CI owns it — it registers a new revision with the real image tag.
+    # Terraform only defines the latest revision's shape (CPU, memory, env), which CI copies.
+    ignore_changes = [desired_count, task_definition]
   }
 }
 
+# Spot suits PyRIT: an internal tool whose results live in Redis, so an interruption
+# just means a restart. The user-facing app stays on regular Fargate.
 resource "aws_ecs_service" "pyrit" {
   name            = "${var.project}-pyrit"
   cluster         = aws_ecs_cluster.main.id
   task_definition = aws_ecs_task_definition.pyrit.arn
   desired_count   = 1
-  launch_type     = "FARGATE"
+
+  capacity_provider_strategy {
+    capacity_provider = "FARGATE_SPOT"
+    weight            = 1
+  }
+
+  depends_on = [aws_ecs_cluster_capacity_providers.main]
 
   network_configuration {
     subnets          = aws_subnet.public[*].id
@@ -147,6 +167,10 @@ resource "aws_ecs_service" "pyrit" {
     target_group_arn = aws_lb_target_group.pyrit.arn
     container_name   = "pyrit"
     container_port   = 8001
+  }
+
+  lifecycle {
+    ignore_changes = [task_definition] # CI owns the running revision
   }
 }
 

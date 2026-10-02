@@ -14,20 +14,24 @@ variable "project" {
 
 # ─── Container images ────────────────────────────────────────────────────────
 
+# Empty = use the repo's :latest tag, which CI pushes on every deploy.
+# CI pins running services to an exact git-SHA tag; these only seed Terraform's revision.
 variable "app_image" {
-  description = "ECR image URI for the main app"
+  description = "Image URI override for the main app (default: ECR :latest)"
   type        = string
+  default     = ""
 }
 
 variable "pyrit_image" {
-  description = "ECR image URI for the PyRIT dashboard"
+  description = "Image URI override for the PyRIT dashboard (default: ECR :latest)"
   type        = string
+  default     = ""
 }
 
 variable "tensorzero_image" {
-  description = "ECR image URI for TensorZero gateway sidecar"
+  description = "Image URI override for the TensorZero sidecar (default: ECR :latest)"
   type        = string
-  default     = "placeholder"
+  default     = ""
 }
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
@@ -59,16 +63,19 @@ variable "app_max_capacity" {
   default     = 5
 }
 
+# Sized from measured usage, not guesses. Over 24h at 2 vCPU / 4 GB the task peaked at
+# 235 CPU units and sat flat at ~600 MB. CPU is cut hardest: running short only slows a
+# job. Memory keeps ~3x headroom: running short gets the task killed (OOM).
 variable "app_cpu" {
   description = "CPU units for app task (1024 = 1 vCPU)"
   type        = string
-  default     = "2048"
+  default     = "512"
 }
 
 variable "app_memory" {
   description = "Memory in MB for app task"
   type        = string
-  default     = "4096"
+  default     = "2048"
 }
 
 variable "cpu_scale_target" {

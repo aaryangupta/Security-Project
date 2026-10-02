@@ -1,16 +1,5 @@
 # Chain of trust: internet → alb → ecs_tasks → redis / rds
 
-resource "aws_security_group" "vpc_endpoints" {
-  name   = "${var.project}-vpc-endpoints"
-  vpc_id = aws_vpc.main.id
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [aws_vpc.main.cidr_block]
-  }
-}
-
 resource "aws_security_group" "alb" {
   name   = "${var.project}-alb"
   vpc_id = aws_vpc.main.id
